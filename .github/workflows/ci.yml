@@ -1,8 +1,6 @@
 name: CI
 
-on:
-  push:
-  pull_request:
+on: [push, pull_request]
 
 jobs:
   check:
@@ -25,6 +23,6 @@ jobs:
       - name: Install script syntax
         run: bash -n install.sh
       - name: Bundle patch parses
-        run: grep -q "id: dsh-cordis-mcp" cordis.patch.yml
+        run: 'grep -q "id: dsh-cordis-mcp" cordis.patch.yml'
       - name: Unit tests
         run: node --test test/*.test.mjs
