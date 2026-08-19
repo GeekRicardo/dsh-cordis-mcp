@@ -1,7 +1,7 @@
 {
   "name": "dsh-cordis-mcp",
-  "description": "DeepSeek Harness 插件：把 DSH 的动态 Cordis 工具集以 MCP 暴露给 Claude Code",
-  "version": "1.0.0",
+  "description": "DeepSeek Harness 插件：把 DSH 的动态 Cordis 工具集以 MCP 暴露给 Claude Code（强制认证）",
+  "version": "1.1.0",
   "entry": {
     "name": "dsh-cordis-mcp",
     "inject": []

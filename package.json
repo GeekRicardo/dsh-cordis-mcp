@@ -1,7 +1,7 @@
 {
   "name": "dsh-cordis-mcp",
-  "version": "1.0.0",
-  "description": "DeepSeek Harness 插件：把 DSH 的动态 Cordis 工具集（inspect/define/run/stop/undefine）以 MCP 暴露给 Claude Code，可在任意会话里实时加载、定义、管理动态插件。",
+  "version": "1.1.0",
+  "description": "DeepSeek Harness 插件：把 DSH 的动态 Cordis 工具集（inspect/define/run/stop/undefine）以 MCP 暴露给 Claude Code。端点强制身份认证，token 可在 DSH 设置页配置。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -27,7 +27,8 @@
     "dsh.plugin.json",
     "README.md",
     "LICENSE",
-    "install.sh"
+    "install.sh",
+    "lib/token.js"
   ],
   "license": "MIT",
   "engines": {
@@ -39,5 +40,8 @@
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
   }
 }

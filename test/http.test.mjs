@@ -5,6 +5,8 @@ import { createServer, request } from "node:http";
 import { handleRequest } from "../lib/mcp-protocol.js";
 import { createRouteHandler } from "../lib/http.js";
 
+const TOKEN = "test-token-123";
+
 const tools = {
   echo: {
     description: "Echo.",
@@ -52,15 +54,16 @@ function post(url, body, headers = {}) {
   });
 }
 
-async function rpc(method, params, id = 1) {
-  const res = await post(base, { jsonrpc: "2.0", id, method, params });
+function authedPost(url, body, headers = {}) {
+  return post(url, body, { authorization: `Bearer ${TOKEN}`, ...headers });
+}
+
+async function rpc(method, params, id = 1, headers = {}) {
+  const res = await authedPost(base, { jsonrpc: "2.0", id, method, params }, headers);
   return { status: res.status, body: await res.json() };
 }
 
-/**
- * Raw node:http request so we can set headers fetch forbids (Host) and send
- * bodies the server rejects mid-stream.
- */
+/** Raw node:http request so we can set headers fetch forbids (Host). */
 function rawPost(path, body, headers) {
   return new Promise((resolve, reject) => {
     const payload = typeof body === "string" ? body : JSON.stringify(body);
@@ -83,8 +86,69 @@ function rawPost(path, body, headers) {
   });
 }
 
+// ── auth is mandatory ──────────────────────────────────────────────────────
+
+test("without a token provider the endpoint refuses with 503 (never open)", async () => {
+  await startServer({ getToken: () => null });
+  try {
+    const res = await post(base, { jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+    assert.equal(res.status, 503);
+    const body = await res.json();
+    assert.equal(body.error, "auth-not-configured");
+  } finally {
+    await stopServer();
+  }
+});
+
+test("without credentials the endpoint answers 401; with the token it works", async () => {
+  await startServer({ getToken: () => TOKEN });
+  try {
+    const denied = await post(base, { jsonrpc: "2.0", id: 1, method: "ping" });
+    assert.equal(denied.status, 401);
+
+    const ok = await authedPost(base, { jsonrpc: "2.0", id: 1, method: "ping" });
+    assert.equal(ok.status, 200);
+    assert.deepEqual((await ok.json()).result, {});
+
+    const alt = await post(base, { jsonrpc: "2.0", id: 1, method: "ping" }, { "x-dsh-mcp-token": TOKEN });
+    assert.equal(alt.status, 200);
+  } finally {
+    await stopServer();
+  }
+});
+
+test("getToken is evaluated per request, so a mid-flight change takes effect immediately", async () => {
+  let current = "first-token";
+  await startServer({ getToken: () => current });
+  try {
+    const a = await authedPost(base, { jsonrpc: "2.0", id: 1, method: "ping" }, { authorization: "Bearer first-token" });
+    assert.equal(a.status, 200);
+
+    current = "second-token";
+    const stale = await authedPost(base, { jsonrpc: "2.0", id: 1, method: "ping" }, { authorization: "Bearer first-token" });
+    assert.equal(stale.status, 401);
+
+    const fresh = await authedPost(base, { jsonrpc: "2.0", id: 1, method: "ping" }, { authorization: "Bearer second-token" });
+    assert.equal(fresh.status, 200);
+  } finally {
+    await stopServer();
+  }
+});
+
+test("async getToken provider is awaited", async () => {
+  await startServer({ getToken: () => Promise.resolve(TOKEN) });
+  try {
+    const ok = await authedPost(base, { jsonrpc: "2.0", id: 1, method: "ping" });
+    assert.equal(ok.status, 200);
+  } finally {
+    await stopServer();
+  }
+});
+
+// ── protocol behavior (authenticated) ──────────────────────────────────────
+
 test("initialize returns serverInfo and negotiated version", async () => {
-  await startServer();
+  await startServer({ getToken: () => TOKEN });
   try {
     const { status, body } = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "claude-code", version: "1" } });
     assert.equal(status, 200);
@@ -97,13 +161,13 @@ test("initialize returns serverInfo and negotiated version", async () => {
 });
 
 test("full Claude Code handshake: initialize → initialized → tools/list → tools/call", async () => {
-  await startServer();
+  await startServer({ getToken: () => TOKEN });
   try {
     const init = await rpc("initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "claude-code", version: "1.0" } });
     assert.equal(init.status, 200);
     assert.equal(init.body.result.protocolVersion, "2025-03-26");
 
-    const ack = await post(base, { jsonrpc: "2.0", method: "notifications/initialized" });
+    const ack = await authedPost(base, { jsonrpc: "2.0", method: "notifications/initialized" });
     assert.equal(ack.status, 202);
     assert.equal((await ack.text()).length, 0);
 
@@ -126,15 +190,15 @@ test("full Claude Code handshake: initialize → initialized → tools/list → 
 });
 
 test("GET and unknown methods are rejected with the right codes", async () => {
-  await startServer();
+  await startServer({ getToken: () => TOKEN });
   try {
-    const get = await fetch(base);
+    const get = await fetch(base, { headers: { authorization: `Bearer ${TOKEN}` } });
     assert.equal(get.status, 405);
 
     const unknown = await rpc("resources/list", undefined, 5);
     assert.equal(unknown.body.error.code, -32601);
 
-    const badJson = await post(base, "{not json");
+    const badJson = await authedPost(base, "{not json");
     assert.equal(badJson.status, 400);
     assert.equal((await badJson.json()).error.code, -32700);
   } finally {
@@ -142,30 +206,13 @@ test("GET and unknown methods are rejected with the right codes", async () => {
   }
 });
 
-test("token gate: 401 without, 200 with", async () => {
-  await startServer({ token: "s3cret" });
+test("non-loopback Host and cross-site requests are rejected before auth", async () => {
+  await startServer({ getToken: () => TOKEN });
   try {
-    const denied = await post(base, { jsonrpc: "2.0", id: 1, method: "ping" });
-    assert.equal(denied.status, 401);
-
-    const authHeader = await post(base, { jsonrpc: "2.0", id: 1, method: "ping" }, { authorization: "Bearer s3cret" });
-    assert.equal(authHeader.status, 200);
-    assert.deepEqual((await authHeader.json()).result, {});
-
-    const altHeader = await post(base, { jsonrpc: "2.0", id: 1, method: "ping" }, { "x-dsh-mcp-token": "s3cret" });
-    assert.equal(altHeader.status, 200);
-  } finally {
-    await stopServer();
-  }
-});
-
-test("non-loopback Host and cross-site requests are rejected", async () => {
-  await startServer();
-  try {
-    const evilHost = await rawPost("/mcp", { jsonrpc: "2.0", id: 1, method: "ping" }, { host: "evil.example.com" });
+    const evilHost = await rawPost("/mcp", { jsonrpc: "2.0", id: 1, method: "ping" }, { host: "evil.example.com", authorization: `Bearer ${TOKEN}` });
     assert.equal(evilHost.status, 403);
 
-    const crossSite = await post(base, { jsonrpc: "2.0", id: 1, method: "ping" }, { "sec-fetch-site": "cross-site" });
+    const crossSite = await authedPost(base, { jsonrpc: "2.0", id: 1, method: "ping" }, { "sec-fetch-site": "cross-site" });
     assert.equal(crossSite.status, 403);
   } finally {
     await stopServer();
@@ -173,7 +220,7 @@ test("non-loopback Host and cross-site requests are rejected", async () => {
 });
 
 test("OPTIONS preflight gets 204 with no CORS headers", async () => {
-  await startServer();
+  await startServer({ getToken: () => TOKEN });
   try {
     const res = await fetch(base, { method: "OPTIONS" });
     assert.equal(res.status, 204);
@@ -184,9 +231,9 @@ test("OPTIONS preflight gets 204 with no CORS headers", async () => {
 });
 
 test("oversized body is rejected with 413", async () => {
-  await startServer({ maxBodyBytes: 128 });
+  await startServer({ getToken: () => TOKEN, maxBodyBytes: 128 });
   try {
-    const res = await rawPost("/mcp", "x".repeat(1024));
+    const res = await rawPost("/mcp", "x".repeat(1024), { authorization: `Bearer ${TOKEN}` });
     assert.equal(res.status, 413);
     assert.match(res.body, /exceeds/);
   } finally {

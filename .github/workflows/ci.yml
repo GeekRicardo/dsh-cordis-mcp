@@ -16,6 +16,7 @@ jobs:
           node --check lib/tools.js
           node --check lib/http.js
           node --check lib/mcp-protocol.js
+          node --check lib/token.js
           node --check lib/client.js
       - name: Manifest JSON valid
         run: |

@@ -11,7 +11,7 @@
                                                       └───────────────────────────┘
 ```
 
-插件是 **host-only** 的：只消费宿主服务（`dynamicCordisRunner` / `cordisInspect` / `agents` / `webServer`），挂在现有 web 端口上，不新开端口、不发布服务、无浏览器 UI。
+插件挂在现有 web 端口上，不新开端口、不发布服务；MCP 端点**强制 Bearer 认证**，token 在 **DSH 设置 → dsh-cordis-mcp** 页面配置（首次自动生成，可自定义/重新生成）。
 
 ## 能力（10 个工具）
 
@@ -57,32 +57,9 @@ claude mcp add dsh --transport http http://127.0.0.1:8090/mcp
 claude mcp list          # 确认 connected
 ```
 
-或写入项目 `.mcp.json`：
+### 认证（强制，不能直连）
 
-```json
-{
-  "mcpServers": {
-    "dsh": {
-      "type": "http",
-      "url": "http://127.0.0.1:8090/mcp"
-    }
-  }
-}
-```
-
-然后直接对 Claude 说：
-
-> 用 dsh_plugins_list 看看现在有哪些动态插件，然后 dsh_inspect_query 查一下 `dynamicCordisRunner` 服务，再 dsh_plugin_define + dsh_plugin_run 给我建一个打印 hello 的 host 插件。
-
-### 可选：Token 鉴权
-
-MCP 端点默认**仅限 loopback + 拒绝跨站**，不设密码。要加一道 token，给 DSH 进程设置环境变量后重启：
-
-```bash
-DSH_MCP_TOKEN=随便一串长随机值
-```
-
-`.mcp.json` 带请求头：
+MCP 端点**强制 Bearer 认证**，未带 token 一律 401（未配置 token 则 503）。token 在 **DSH 设置 → dsh-cordis-mcp** 页面里配置：首次使用自动生成并持久化，页面可查看/复制/自定义/重新生成。把 token 填进 `.mcp.json` 的请求头：
 
 ```json
 {
@@ -90,11 +67,13 @@ DSH_MCP_TOKEN=随便一串长随机值
     "dsh": {
       "type": "http",
       "url": "http://127.0.0.1:8090/mcp",
-      "headers": { "Authorization": "Bearer 随便一串长随机值" }
+      "headers": { "Authorization": "Bearer <设置页里的 token>" }
     }
   }
 }
 ```
+
+token 解析优先级：**设置页配置 > `DSH_MCP_TOKEN` 环境变量 > 自动生成**。改 token 立即生效（无需重启）；重新生成后旧 token 立即失效，需同步更新 Claude Code 配置。
 
 ## 会话语义（重要）
 
@@ -110,14 +89,15 @@ DSH_MCP_TOKEN=随便一串长随机值
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `DSH_MCP_PATH` | `/mcp` | MCP 端点路径（挂在 webServer 上） |
-| `DSH_MCP_TOKEN` | 无 | 设置后所有请求必须带 `Authorization: Bearer <token>`（或 `X-DSH-MCP-Token`） |
+| `DSH_MCP_TOKEN` | 无 | 认证 token 的回退来源（设置页未配置时使用） |
 | `DSH_MCP_DEFAULT_SESSION` | 无 | 未显式传 `sessionId` 时的目标会话 |
 
 ## 安全边界
 
+- **强制 Bearer 认证**：无 token 一律 401 / 503，端点永远不能直连；
 - 只接受 loopback Host（`127.*` / `localhost` / `::1`），拒绝一切外部访问；
 - 拒绝 `sec-fetch-site: cross-site` 的浏览器请求，且**永不返回 CORS 头**——网页读不到响应；
-- 可选 token 全请求校验；
+- 设置页路由 `/dsh-cordis-mcp/settings` 仅放行同源 loopback（不带 MCP token，但改的只是 token 配置本身）；
 - 该端点能 define/run/删除插件，**等同 shell 权限**，别把端口暴露到非本机。
 
 ## 工作原理
@@ -126,9 +106,10 @@ DSH_MCP_TOKEN=随便一串长随机值
 | --- | --- |
 | `lib/mcp-protocol.js` | 纯 MCP JSON-RPC 层（initialize / ping / tools/list / tools/call），零 DSH 依赖 |
 | `lib/tools.js` | 10 个工具的输入校验 + 会话解析，封装 `dynamicCordisRunner` / `cordisInspect` |
-| `lib/http.js` | webServer route 上的 HTTP 层：body 读取、鉴权、loopback/跨站防护 |
-| `lib/index.js` | Cordis 插件：注入 4 个宿主服务、注册 `/mcp` route、打印就绪日志 |
-| `lib/client.js` | 空 web face（本插件无浏览器 UI） |
+| `lib/token.js` | 纯 token 解析/生成（设置 > env > 自动生成） |
+| `lib/http.js` | MCP route 的 HTTP 层：强制认证、body 读取、loopback/跨站防护 |
+| `lib/index.js` | Cordis 插件：注入 5 个宿主服务、settings 命名空间、`/mcp` + `/dsh-cordis-mcp/settings` 两条 route |
+| `lib/client.js` | 设置页 UI：token 查看/复制/自定义/重新生成 + 端点地址 |
 
 ## 卸载
 
@@ -153,6 +134,8 @@ DSH_MCP_TOKEN=随便一串长随机值
 | `dsh_plugin_run` 返回 `awaiting-approval` | 含 Client half 的包需要你在 DSH Web GUI 的 Run 卡片上允许；授权后重跑 `dsh_plugin_run` |
 | 报 `multiple live DSH sessions` | 有多个活会话，先 `dsh_sessions` 查 id，再在调用里传 `sessionId` |
 | 报 `no live DSH session` | DSH Web GUI 没打开任何会话；打开后再试 |
+| 401 / `missing or invalid bearer token` | `.mcp.json` 里的 token 过期或不对——去设置页复制当前 token 更新 |
+| 503 / `auth-not-configured` | host 未初始化 token（异常态）——在设置页保存任意 token 或重启 DSH |
 | 插件重启后消失 | 动态插件是进程内存态，属预期；本桥只管理运行中的 DSH 进程 |
 
 ## License
