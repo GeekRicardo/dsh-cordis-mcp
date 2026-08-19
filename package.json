@@ -1,0 +1,43 @@
+{
+  "name": "dsh-cordis-mcp",
+  "version": "1.0.0",
+  "description": "DeepSeek Harness 插件：把 DSH 的动态 Cordis 工具集（inspect/define/run/stop/undefine）以 MCP 暴露给 Claude Code，可在任意会话里实时加载、定义、管理动态插件。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "files": [
+    "lib/index.js",
+    "lib/tools.js",
+    "lib/http.js",
+    "lib/mcp-protocol.js",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "dsh.plugin.json",
+    "README.md",
+    "LICENSE",
+    "install.sh"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GeekRicardo/dsh-cordis-mcp"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

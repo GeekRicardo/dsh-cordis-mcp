@@ -1,0 +1,9 @@
+# dsh-cordis-mcp bundle patch
+#
+# 安装后（dependencies + dsh.profile.bundles 均含 dsh-cordis-mcp），
+# 启动时 profile boot 会合并本 patch，把插件行插入 host composition。
+# 该行只消费 host 服务（dynamicCordisRunner / agents / cordisInspect /
+# webServer），不发布任何服务，因此不需要 isolate realm。
+- insert:
+    - id: dsh-cordis-mcp
+      name: 'dsh-cordis-mcp'
