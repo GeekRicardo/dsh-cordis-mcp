@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
 
 import { handleRequest } from "../lib/mcp-protocol.js";
-import { createRouteHandler } from "../lib/http.js";
+import { createRouteHandler, timingSafeEqualString } from "../lib/http.js";
 
 const TOKEN = "test-token-123";
 
@@ -244,4 +244,46 @@ test("oversized body is rejected with 413", async () => {
 test("handleRequest is importable for direct protocol tests", async () => {
   const response = await handleRequest({ jsonrpc: "2.0", id: 1, method: "ping" }, tools, serverInfo);
   assert.deepEqual(response, { id: 1, result: {} });
+});
+
+// ── constant-time token comparison ─────────────────────────────────────────
+
+test("timingSafeEqualString matches only on equal strings", () => {
+  assert.equal(timingSafeEqualString("abc", "abc"), true);
+  assert.equal(timingSafeEqualString("", ""), true);
+  assert.equal(timingSafeEqualString("abc", "abd"), false);
+  assert.equal(timingSafeEqualString("abc", "abcd"), false, "a prefix is not a match");
+  assert.equal(timingSafeEqualString("abcd", "abc"), false, "an extension is not a match");
+  assert.equal(timingSafeEqualString("abc", ""), false);
+});
+
+test("timingSafeEqualString treats non-strings as empty rather than throwing", () => {
+  assert.equal(timingSafeEqualString(undefined, "abc"), false);
+  assert.equal(timingSafeEqualString(["abc"], "abc"), false);
+  assert.equal(timingSafeEqualString(undefined, ""), true, "both sides collapse to the empty string");
+});
+
+test("a token that shares a long prefix is still rejected", async () => {
+  await startServer({ getToken: () => TOKEN });
+  try {
+    const near = `${TOKEN.slice(0, TOKEN.length - 1)}X`;
+    const res = await post(base, { jsonrpc: "2.0", id: 1, method: "ping" }, { authorization: `Bearer ${near}` });
+    assert.equal(res.status, 401);
+  } finally {
+    await stopServer();
+  }
+});
+
+test("a repeated x-dsh-mcp-token header cannot smuggle a match", async () => {
+  await startServer({ getToken: () => TOKEN });
+  try {
+    // node:http folds repeated non-special headers into "a, b"; the handler
+    // must compare that folded value, not silently accept it.
+    const res = await rawPost("/mcp", { jsonrpc: "2.0", id: 1, method: "ping" }, {
+      "x-dsh-mcp-token": ["wrong", TOKEN],
+    });
+    assert.equal(res.status, 401);
+  } finally {
+    await stopServer();
+  }
 });
