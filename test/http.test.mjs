@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
 
-import { handleRequest } from "../lib/mcp-protocol.js";
+import { handleRequest, PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from "../lib/mcp-protocol.js";
 import { createRouteHandler, timingSafeEqualString } from "../lib/http.js";
 
 const TOKEN = "test-token-123";
@@ -350,6 +350,60 @@ test("the endpoint's own Origin is allowed", async () => {
       origin: `http://127.0.0.1:${port}`,
     });
     assert.equal(res.status, 200);
+  } finally {
+    await stopServer();
+  }
+});
+
+// ── MCP-Protocol-Version ───────────────────────────────────────────────────
+
+test("a version header we speak is echoed back on the response", async () => {
+  await startServer({ getToken: () => TOKEN });
+  try {
+    const res = await authedPost(base, { jsonrpc: "2.0", id: 1, method: "ping" }, {
+      "mcp-protocol-version": "2025-03-26",
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("mcp-protocol-version"), "2025-03-26");
+  } finally {
+    await stopServer();
+  }
+});
+
+test("no version header still answers, stamped with the newest version we speak", async () => {
+  await startServer({ getToken: () => TOKEN });
+  try {
+    const res = await authedPost(base, { jsonrpc: "2.0", id: 1, method: "ping" });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("mcp-protocol-version"), PROTOCOL_VERSION);
+  } finally {
+    await stopServer();
+  }
+});
+
+test("a version header we do not speak is a 400 naming the ones we do", async () => {
+  await startServer({ getToken: () => TOKEN });
+  try {
+    const res = await authedPost(base, { jsonrpc: "2.0", id: 1, method: "ping" }, {
+      "mcp-protocol-version": "1999-01-01",
+    });
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.equal(body.error, "unsupported-protocol-version");
+    assert.deepEqual(body.supported, SUPPORTED_PROTOCOL_VERSIONS);
+  } finally {
+    await stopServer();
+  }
+});
+
+test("a notification carries the version stamp too", async () => {
+  await startServer({ getToken: () => TOKEN });
+  try {
+    const res = await authedPost(base, { jsonrpc: "2.0", method: "notifications/initialized" }, {
+      "mcp-protocol-version": "2024-11-05",
+    });
+    assert.equal(res.status, 202);
+    assert.equal(res.headers.get("mcp-protocol-version"), "2024-11-05");
   } finally {
     await stopServer();
   }
