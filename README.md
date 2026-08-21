@@ -94,10 +94,11 @@ token 解析优先级：**设置页配置 > `DSH_MCP_TOKEN` 环境变量 > 自�
 
 ## 安全边界
 
-- **强制 Bearer 认证**：无 token 一律 401 / 503，端点永远不能直连；
-- 只接受 loopback Host（`127.*` / `localhost` / `::1`），拒绝一切外部访问；
+- **强制 Bearer 认证**：无 token 一律 401 / 503，端点永远不能直连；token 走常数时间比较，猜对的前缀不会让拒绝来得更慢；
+- 只接受 loopback Host（`127.*` / `localhost` / `::1`，含 `[::1]:port` 这种带方括号的写法），拒绝一切外部访问；
+- 浏览器带来的 `Origin` 必须是回环、且与本端点的 host:port 一致（MCP 规范要求的 DNS rebinding 防护）；完全没有 `Origin` 的请求视为非浏览器客户端（Claude Code 就是），由 token 把守；
 - 拒绝 `sec-fetch-site: cross-site` 的浏览器请求，且**永不返回 CORS 头**——网页读不到响应；
-- 设置页路由 `/dsh-cordis-mcp/settings` 仅放行同源 loopback（不带 MCP token，但改的只是 token 配置本身）；
+- 设置页路由 `/dsh-cordis-mcp/settings` 与 MCP 端点共用同一套同源判定（不带 MCP token，但改的只是 token 配置本身）；
 - 该端点能 define/run/删除插件，**等同 shell 权限**，别把端口暴露到非本机。
 
 ## 工作原理
