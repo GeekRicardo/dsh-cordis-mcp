@@ -287,3 +287,70 @@ test("a repeated x-dsh-mcp-token header cannot smuggle a match", async () => {
     await stopServer();
   }
 });
+
+// ── Origin validation (DNS-rebinding guard) ────────────────────────────────
+
+test("a request with no Origin is allowed — that is the non-browser client", async () => {
+  await startServer({ getToken: () => TOKEN });
+  try {
+    const res = await rawPost("/mcp", { jsonrpc: "2.0", id: 1, method: "ping" }, {
+      authorization: `Bearer ${TOKEN}`,
+    });
+    assert.equal(res.status, 200);
+  } finally {
+    await stopServer();
+  }
+});
+
+test("a foreign Origin is refused even with a valid token", async () => {
+  await startServer({ getToken: () => TOKEN });
+  try {
+    const res = await rawPost("/mcp", { jsonrpc: "2.0", id: 1, method: "ping" }, {
+      authorization: `Bearer ${TOKEN}`,
+      origin: "https://attacker.example",
+    });
+    assert.equal(res.status, 403);
+    assert.match(res.body, /Origin/);
+  } finally {
+    await stopServer();
+  }
+});
+
+test("a loopback Origin on another port is refused", async () => {
+  await startServer({ getToken: () => TOKEN });
+  try {
+    const res = await rawPost("/mcp", { jsonrpc: "2.0", id: 1, method: "ping" }, {
+      authorization: `Bearer ${TOKEN}`,
+      origin: `http://127.0.0.1:${port === 65535 ? 1024 : port + 1}`,
+    });
+    assert.equal(res.status, 403);
+  } finally {
+    await stopServer();
+  }
+});
+
+test("the opaque Origin \"null\" is refused", async () => {
+  await startServer({ getToken: () => TOKEN });
+  try {
+    const res = await rawPost("/mcp", { jsonrpc: "2.0", id: 1, method: "ping" }, {
+      authorization: `Bearer ${TOKEN}`,
+      origin: "null",
+    });
+    assert.equal(res.status, 403);
+  } finally {
+    await stopServer();
+  }
+});
+
+test("the endpoint's own Origin is allowed", async () => {
+  await startServer({ getToken: () => TOKEN });
+  try {
+    const res = await rawPost("/mcp", { jsonrpc: "2.0", id: 1, method: "ping" }, {
+      authorization: `Bearer ${TOKEN}`,
+      origin: `http://127.0.0.1:${port}`,
+    });
+    assert.equal(res.status, 200);
+  } finally {
+    await stopServer();
+  }
+});
