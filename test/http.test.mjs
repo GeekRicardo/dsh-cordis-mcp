@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
 
 import { handleRequest, PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from "../lib/mcp-protocol.js";
-import { createRouteHandler, isSameOriginRequest, timingSafeEqualString } from "../lib/http.js";
+import { createRouteHandler, hostnameOf, isSameOriginRequest, timingSafeEqualString } from "../lib/http.js";
 
 const TOKEN = "test-token-123";
 
@@ -468,4 +468,35 @@ test("isSameOriginRequest allows this endpoint's own page", () => {
     isSameOriginRequest(asReq({ host: "127.0.0.1:8090", origin: "http://127.0.0.1:8090", "sec-fetch-site": "same-origin" })),
     true,
   );
+});
+
+// ── IPv6 loopback ──────────────────────────────────────────────────────────
+
+test("hostnameOf keeps an IPv6 literal whole and strips the port", () => {
+  assert.equal(hostnameOf("127.0.0.1:8090"), "127.0.0.1");
+  assert.equal(hostnameOf("localhost"), "localhost");
+  assert.equal(hostnameOf("[::1]:8090"), "[::1]");
+  assert.equal(hostnameOf("[::1]"), "[::1]");
+  assert.equal(hostnameOf("[bad"), null, "an unterminated literal is not a host");
+  assert.equal(hostnameOf(undefined), null);
+  assert.equal(hostnameOf(""), null);
+});
+
+test("a request addressed as [::1] is loopback, not foreign", () => {
+  // DSH bound to :: is reachable at http://[::1]:<port>/mcp, and its own
+  // settings page is then served from that origin. Splitting the Host on ":"
+  // used to turn "[::1]:8090" into "[" and answer 403 to both.
+  assert.equal(isSameOriginRequest(asReq({ host: "[::1]:8090" })), true);
+  assert.equal(
+    isSameOriginRequest(asReq({ host: "[::1]:8090", origin: "http://[::1]:8090" })),
+    true,
+  );
+  assert.equal(
+    isSameOriginRequest(asReq({ host: "[::1]:8090", origin: "http://[::1]:9999" })),
+    false,
+  );
+});
+
+test("an IPv6 non-loopback Host is still refused", () => {
+  assert.equal(isSameOriginRequest(asReq({ host: "[2001:db8::1]:8090" })), false);
 });
