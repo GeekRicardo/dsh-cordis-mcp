@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
 
 import { handleRequest, PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from "../lib/mcp-protocol.js";
-import { createRouteHandler, timingSafeEqualString } from "../lib/http.js";
+import { createRouteHandler, isSameOriginRequest, timingSafeEqualString } from "../lib/http.js";
 
 const TOKEN = "test-token-123";
 
@@ -431,4 +431,41 @@ test("405 lists the methods this endpoint accepts", async () => {
   } finally {
     await stopServer();
   }
+});
+
+// ── same-origin guard shared with the settings route ───────────────────────
+
+const asReq = (headers) => ({ headers });
+
+test("isSameOriginRequest allows a loopback caller with no Origin", () => {
+  assert.equal(isSameOriginRequest(asReq({ host: "127.0.0.1:8090" })), true);
+  assert.equal(isSameOriginRequest(asReq({ host: "localhost:8090" })), true);
+});
+
+test("isSameOriginRequest refuses a non-loopback Host", () => {
+  assert.equal(isSameOriginRequest(asReq({ host: "dsh.example.com" })), false);
+  assert.equal(isSameOriginRequest(asReq({})), false);
+});
+
+test("isSameOriginRequest refuses cross-site fetches and foreign Origins", () => {
+  assert.equal(
+    isSameOriginRequest(asReq({ host: "127.0.0.1:8090", "sec-fetch-site": "cross-site" })),
+    false,
+  );
+  assert.equal(
+    isSameOriginRequest(asReq({ host: "127.0.0.1:8090", origin: "https://attacker.example" })),
+    false,
+  );
+  assert.equal(
+    isSameOriginRequest(asReq({ host: "127.0.0.1:8090", origin: "http://127.0.0.1:9999" })),
+    false,
+    "another local app on another port is not this endpoint",
+  );
+});
+
+test("isSameOriginRequest allows this endpoint's own page", () => {
+  assert.equal(
+    isSameOriginRequest(asReq({ host: "127.0.0.1:8090", origin: "http://127.0.0.1:8090", "sec-fetch-site": "same-origin" })),
+    true,
+  );
 });
