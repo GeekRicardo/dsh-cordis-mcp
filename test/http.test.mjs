@@ -408,3 +408,27 @@ test("a notification carries the version stamp too", async () => {
     await stopServer();
   }
 });
+
+// ── HTTP-level headers ─────────────────────────────────────────────────────
+
+test("401 names the auth scheme in WWW-Authenticate", async () => {
+  await startServer({ getToken: () => TOKEN });
+  try {
+    const res = await post(base, { jsonrpc: "2.0", id: 1, method: "ping" });
+    assert.equal(res.status, 401);
+    assert.match(res.headers.get("www-authenticate") || "", /^Bearer /);
+  } finally {
+    await stopServer();
+  }
+});
+
+test("405 lists the methods this endpoint accepts", async () => {
+  await startServer({ getToken: () => TOKEN });
+  try {
+    const res = await fetch(base, { method: "GET", headers: { authorization: `Bearer ${TOKEN}` } });
+    assert.equal(res.status, 405);
+    assert.equal(res.headers.get("allow"), "POST, OPTIONS");
+  } finally {
+    await stopServer();
+  }
+});
