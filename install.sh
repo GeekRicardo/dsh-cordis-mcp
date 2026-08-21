@@ -12,7 +12,8 @@
 #   或下载后本地运行：bash install.sh [--dry-run] [--restart]
 #
 #   --dry-run   只打印将要执行的操作，不写任何文件。
-#   --restart   装完后尝试重启 DSH web（pm2 托管时自动，否则提示手动）。
+#   --restart   装完（或卸载）后尝试重启 DSH web（pm2 托管时自动，否则提示手动）。
+#   --uninstall 从 profile 移除本插件（dependencies + dsh.profile.bundles）后重装依赖。
 #   -h/--help   打印本帮助。
 #
 # 环境变量（均可省略）：DSH_HOME（默认 ~/.dsh）
@@ -29,7 +30,8 @@ dsh-cordis-mcp 一键安装脚本
   或：bash install.sh [--dry-run] [--restart]
 
   --dry-run    只打印将要执行的操作，不写任何文件
-  --restart    装完后尝试重启 DSH web（pm2 托管时自动，否则提示手动）
+  --restart    装完（或卸载）后尝试重启 DSH web（pm2 托管时自动，否则提示手动）
+  --uninstall  从 profile 移除本插件（dependencies + dsh.profile.bundles）后重装依赖
 
 环境变量（可省略）：DSH_HOME（默认 ~/.dsh）
 EOF
@@ -45,10 +47,12 @@ GH_DEP="github:GeekRicardo/dsh-cordis-mcp"
 
 DRY_RUN=false
 RESTART=false
+UNINSTALL=false
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=true ;;
     --restart) RESTART=true ;;
+    --uninstall) UNINSTALL=true ;;
     -h|--help) : ;;
     *) echo "未知参数: ${arg}（用 -h 查看用法）" >&2; exit 2 ;;
   esac
@@ -62,6 +66,78 @@ command -v node >/dev/null 2>&1 || die "未找到 node（DSH 需要 Node.js ≥ 
 command -v pnpm >/dev/null 2>&1 || die "未找到 pnpm"
 [ -d "$PROFILE_DIR" ] || die "找不到 profile 目录：${PROFILE_DIR}（请先安装并运行过一次 dsh web）"
 [ -f "$PKG_JSON" ] || die "找不到 ${PKG_JSON}"
+
+# ── 卸载 ─────────────────────────────────────────────────────────────────────
+# 与安装完全对称：把 dependencies 与 dsh.profile.bundles 里的本包条目摘掉再
+# pnpm install。MCP 端点随 bundle 一起消失，Claude Code 那边记得 claude mcp
+# remove 掉对应的 server 条目。
+if [ "$UNINSTALL" = true ]; then
+  if [ "$DRY_RUN" = true ]; then
+    say "[dry-run] 步骤 1：从 ${PKG_JSON} 移除 dependencies[\"${PKG}\"]"
+    say "[dry-run] 步骤 2：从 dsh.profile.bundles 移除 \"${PKG}\""
+    say "[dry-run] 步骤 3：cd ${PROFILE_DIR} && pnpm install"
+    say "[dry-run] 步骤 4：校验 dsh.profile.bundles 不再含 ${PKG}"
+    say "[dry-run] 步骤 5：提示在 Claude Code 里 claude mcp remove dsh"
+    exit 0
+  fi
+
+  say "目标 profile：${PROFILE_DIR}"
+  REMOVE_RESULT="$(node -e '
+const fs = require("fs");
+const p = process.argv[1];
+const pkg = process.argv[2];
+const json = JSON.parse(fs.readFileSync(p, "utf8"));
+let changed = false;
+if (json.dependencies && json.dependencies[pkg] !== undefined) {
+  delete json.dependencies[pkg];
+  changed = true;
+}
+const bundles = json.dsh && json.dsh.profile && json.dsh.profile.bundles;
+if (Array.isArray(bundles)) {
+  const next = bundles.filter((entry) => entry !== pkg);
+  if (next.length !== bundles.length) {
+    json.dsh.profile.bundles = next;
+    changed = true;
+  }
+}
+if (changed) {
+  fs.writeFileSync(p, JSON.stringify(json, null, 2) + "\n");
+  console.log("updated");
+} else {
+  console.log("unchanged");
+}
+' "$PKG_JSON" "$PKG")"
+  [ "$REMOVE_RESULT" = "updated" ] \
+    && say "已从 dependencies + dsh.profile.bundles 移除 ${PKG}" \
+    || say "profile 里本来就没有 ${PKG}，无需移除"
+
+  say "执行 pnpm install（清理依赖树）..."
+  ( cd "$PROFILE_DIR" && pnpm install )
+
+  if node -e '
+    const fs = require("fs");
+    const p = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const bundles = (p.dsh && p.dsh.profile && p.dsh.profile.bundles) || [];
+    process.exit(bundles.includes(process.argv[2]) ? 0 : 1);
+  ' "$PKG_JSON" "$PKG"; then
+    die "${PKG} 仍在 dsh.profile.bundles 中，卸载未完成，请检查 ${PKG_JSON}。"
+  fi
+  say "卸载完成：${PKG}"
+  say "别忘了在 Claude Code 里摘掉对应的 MCP server：claude mcp remove dsh"
+
+  if [ "$RESTART" = true ]; then
+    if command -v pm2 >/dev/null 2>&1 && pm2 list 2>/dev/null | grep -q "dsh"; then
+      say "检测到 pm2 托管的 dsh，重启 dsh-web..."
+      pm2 restart dsh-web || warn "pm2 restart 失败，请手动重启 DSH"
+    else
+      warn "未检测到 pm2 托管的 dsh 进程，无法自动重启。"
+      warn "请手动重启：结束 dsh web 进程后重新运行 dsh web。"
+    fi
+  else
+    say "下一步：重启 DSH web，MCP 端点随之下线。"
+  fi
+  exit 0
+fi
 
 if [ "$DRY_RUN" = true ]; then
   say "[dry-run] 步骤 1：在 ${PKG_JSON} 写入 dependencies[\"${PKG}\"]=\"${GH_DEP}\""

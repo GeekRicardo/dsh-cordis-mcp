@@ -114,6 +114,17 @@ token 解析优先级：**设置页配置 > `DSH_MCP_TOKEN` 环境变量 > 自�
 ## 卸载
 
 ```bash
+bash install.sh --uninstall            # 加 --dry-run 可先看要做什么
+claude mcp remove dsh                  # 摘掉 Claude Code 那侧的 server 条目
+```
+
+`--uninstall` 与安装完全对称：从 `~/.dsh/profiles/web/package.json` 的
+`dependencies` 与 `dsh.profile.bundles` 里摘掉 `dsh-cordis-mcp`，再 `pnpm install`，
+最后校验确实摘干净。加 `--restart` 可顺带重启 pm2 托管的 dsh-web；重启后 MCP 端点下线。
+
+手工卸载（等价步骤）：
+
+```bash
 # 1. 从 ~/.dsh/profiles/web/package.json 的 dsh.profile.bundles 移除 "dsh-cordis-mcp"
 # 2. 移除 dependencies 里的 "dsh-cordis-mcp"
 # 3. cd ~/.dsh/profiles/web && pnpm install
